@@ -2,8 +2,9 @@ name: 自动同步上游规则
 
 on:
   schedule:
-    - cron: '0 21 * * *' # 北京时间 5:00
-  workflow_dispatch:
+    # 北京时间每天凌晨 5:00 执行 (UTC 21:00)
+    - cron: '0 21 * * *'
+  workflow_dispatch: # 允许在 GitHub 页面手动点击运行
 
 jobs:
   sync:
@@ -12,27 +13,31 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
+          # 必须使用你配置的 PAT，否则无法推送回仓库
           token: ${{ secrets.MY_PAT }}
-          fetch-depth: 0
+          fetch-depth: 0 # 检出完整历史以进行对比和合并
 
       - name: 配置 Git 信息
         run: |
-          git config --local user.name "deepgem"
-          git config --local user.email "202297758+deepgem@users.noreply.github.com"
+          git config --local user.name "XXX"
+          git config --local user.email "你的邮箱@example.com"
 
       - name: 添加上游并检出源码
         run: |
           git remote add upstream https://github.com/AIsouler/GKD_subscription.git
           git fetch upstream main
 
-          # 检查熔断：如果上游改了 subscription.ts，则报错退出
-          CHANGES=$(git diff HEAD..upstream/main -- src/subscription.ts)
-          if [ ! -z "$CHANGES" ]; then
-            echo "检测到上游修改了入口文件，停止更新。"
+          NEW_COMMITS=$(git log HEAD..upstream/main -- src/subscription.ts --oneline)
+
+          if [ ! -z "$NEW_COMMITS" ]; then
+            echo "错误：检测到上游对 src/subscription.ts 发布了新的改动："
+            echo "$NEW_COMMITS"
+            echo "为了保护你的定制逻辑不被破坏，自动更新已熔断停止，请手动检查代码。"
             exit 1
           fi
 
-          # 精准同步：只拿源码，不拿作者生成的产物，避免冲突
+          echo "检查通过：上游未对入口文件进行修改，准备同步 App 规则。"
+
           git checkout upstream/main -- src/apps/
           git checkout upstream/main -- package.json pnpm-lock.yaml || true
 
@@ -43,9 +48,8 @@ jobs:
 
       - name: 安装 pnpm
         uses: pnpm/action-setup@v4
-        # 【修复点】：这里移除了 version 字段，让它自动从 package.json 读取
 
-      - name: 安装依赖并构建
+      - name: 安装依赖并重新构建
         run: |
           pnpm install
           pnpm build
@@ -53,5 +57,7 @@ jobs:
       - name: 提交并推送变动
         run: |
           git add .
-          git commit -m "chore(auto): 同步上游 App 规则并重新构建" || true
+
+          git commit -m "chore(auto): 同步上游规则并重新构建" || true
+
           git push origin main
