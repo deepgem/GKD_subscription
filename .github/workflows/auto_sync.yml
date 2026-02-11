@@ -2,9 +2,8 @@ name: 自动同步上游规则
 
 on:
   schedule:
-    # 北京时间每天凌晨 5:00 执行 (UTC 21:00)
-    - cron: '0 21 * * *'
-  workflow_dispatch: # 允许手动点击运行
+    - cron: '0 21 * * *' # 北京时间 5:00
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -14,33 +13,28 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.MY_PAT }}
-          fetch-depth: 0 # 检出所有历史用于合并
+          fetch-depth: 0
 
       - name: 配置 Git 信息
         run: |
-          git config --local user.name "XXX"
-          git config --local user.email "你的邮箱@example.com"
+          git config --local user.name "deepgem"
+          git config --local user.email "202297758+deepgem@users.noreply.github.com"
 
-      - name: 添加并获取上游仓库
+      - name: 添加上游并检出源码
         run: |
           git remote add upstream https://github.com/AIsouler/GKD_subscription.git
           git fetch upstream main
 
-      - name: 检查安全熔断 (subscription.ts)
-        id: check_safety
-        run: |
-          # 检查上游是否对 src/subscription.ts 有新的改动
-          # git log HEAD..upstream/main 查看在 HEAD 中没有但在上游有的关于该文件的提交
-          CHANGES=$(git log HEAD..upstream/main -- src/subscription.ts)
+          # 检查熔断：如果上游改了 subscription.ts，则报错退出
+          CHANGES=$(git diff HEAD..upstream/main -- src/subscription.ts)
           if [ ! -z "$CHANGES" ]; then
-            echo "检测到上游修改了入口文件 src/subscription.ts，为保护定制逻辑，停止自动更新。"
+            echo "检测到上游修改了入口文件，停止更新。"
             exit 1
           fi
 
-      - name: 合并上游更新
-        run: |
-          # 合并上游 main 分支。由于我们没动过 src/apps/，那里通常不会有冲突。
-          git merge upstream/main --no-edit
+          # 精准同步：只拿源码，不拿作者生成的产物，避免冲突
+          git checkout upstream/main -- src/apps/
+          git checkout upstream/main -- package.json pnpm-lock.yaml || true
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
@@ -49,8 +43,7 @@ jobs:
 
       - name: 安装 pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: latest
+        # 【修复点】：这里移除了 version 字段，让它自动从 package.json 读取
 
       - name: 安装依赖并构建
         run: |
@@ -59,8 +52,6 @@ jobs:
 
       - name: 提交并推送变动
         run: |
-          # 运行 build 后的 dist 变动和版本号更新需要提交
           git add .
-          # 如果没有变动，git commit 会返回 1，这里加 || true 防止报错
-          git commit -m "chore(auto): 同步上游并重新构建版本" || true
+          git commit -m "chore(auto): 同步上游 App 规则并重新构建" || true
           git push origin main
