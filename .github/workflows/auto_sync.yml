@@ -1,0 +1,66 @@
+name: 自动同步上游规则
+
+on:
+  schedule:
+    # 北京时间每天凌晨 5:00 执行 (UTC 21:00)
+    - cron: '0 21 * * *'
+  workflow_dispatch: # 允许手动点击运行
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MY_PAT }}
+          fetch-depth: 0 # 检出所有历史用于合并
+
+      - name: 配置 Git 信息
+        run: |
+          git config --local user.name "XXX"
+          git config --local user.email "你的邮箱@example.com"
+
+      - name: 添加并获取上游仓库
+        run: |
+          git remote add upstream https://github.com/AIsouler/GKD_subscription.git
+          git fetch upstream main
+
+      - name: 检查安全熔断 (subscription.ts)
+        id: check_safety
+        run: |
+          # 检查上游是否对 src/subscription.ts 有新的改动
+          # git log HEAD..upstream/main 查看在 HEAD 中没有但在上游有的关于该文件的提交
+          CHANGES=$(git log HEAD..upstream/main -- src/subscription.ts)
+          if [ ! -z "$CHANGES" ]; then
+            echo "检测到上游修改了入口文件 src/subscription.ts，为保护定制逻辑，停止自动更新。"
+            exit 1
+          fi
+
+      - name: 合并上游更新
+        run: |
+          # 合并上游 main 分支。由于我们没动过 src/apps/，那里通常不会有冲突。
+          git merge upstream/main --no-edit
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: 安装依赖并构建
+        run: |
+          pnpm install
+          pnpm build
+
+      - name: 提交并推送变动
+        run: |
+          # 运行 build 后的 dist 变动和版本号更新需要提交
+          git add .
+          # 如果没有变动，git commit 会返回 1，这里加 || true 防止报错
+          git commit -m "chore(auto): 同步上游并重新构建版本" || true
+          git push origin main
